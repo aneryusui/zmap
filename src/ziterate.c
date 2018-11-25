@@ -8,8 +8,8 @@
 
 /*
  * ZIterate is a simple utility that will iteratate over the IPv4
- * space in a pseudo-random fashion, utilizing the sharding capabilities
- * of ZMap.
+ * space in a pseudo-random fashion, utilizing the sharding capabilities * of
+ * ZMap.
  */
 
 #define _GNU_SOURCE
@@ -44,8 +44,8 @@ struct zit_conf {
 	int disable_syslog;
 
 	// sharding options
-	uint8_t shard_num;
-	uint8_t total_shards;
+	uint16_t shard_num;
+	uint16_t total_shards;
 	uint64_t seed;
 	aesrand_t *aes;
 	uint32_t max_hosts;
@@ -180,17 +180,17 @@ int main(int argc, char **argv)
 		    "Need to specify both shard number and total number of shards");
 	}
 	if (args.shard_given) {
-		enforce_range("shard", args.shard_arg, 0, 254);
+		enforce_range("shard", args.shard_arg, 0, 65534);
 		conf.shard_num = args.shard_arg;
 	}
 	if (args.shards_given) {
-		enforce_range("shards", args.shards_arg, 1, 254);
+		enforce_range("shards", args.shards_arg, 1, 65535);
 		conf.total_shards = args.shards_arg;
 	}
 	if (conf.shard_num >= conf.total_shards) {
 		log_fatal("ziterate",
 			  "With %hhu total shards, shard number (%hhu)"
-			  " must be in range [0, %hhu]",
+			  " must be in range [0, %hhu)",
 			  conf.total_shards, conf.shard_num, conf.total_shards);
 	}
 	log_debug(
@@ -209,19 +209,17 @@ int main(int argc, char **argv)
 	}
 	zconf.aes = aesrand_init_from_seed(conf.seed);
 
-	iterator_t *it =
-	    iterator_init(conf.total_shards, conf.shard_num, conf.total_shards);
-	shard_t *shard = get_shard(it, conf.shard_num);
+	iterator_t *it = iterator_init(1, conf.shard_num, conf.total_shards);
+	shard_t *shard = get_shard(it, 0);
 	uint32_t next_int = shard_get_cur_ip(shard);
 	struct in_addr next_ip;
-	uint32_t count = 0;
 
-	while (next_int) {
-		next_ip.s_addr = next_int;
-		printf("%s\n", inet_ntoa(next_ip));
-		if (conf.max_hosts && ++count >= conf.max_hosts) {
+	for (uint32_t count = 0; next_int; ++count) {
+		if (conf.max_hosts && count >= conf.max_hosts) {
 			break;
 		}
+		next_ip.s_addr = next_int;
+		printf("%s\n", inet_ntoa(next_ip));
 		next_int = shard_get_next_ip(shard);
 	}
 	return EXIT_SUCCESS;

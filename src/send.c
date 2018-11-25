@@ -54,11 +54,8 @@ static inline int send_run_init(sock_t sock);
 // Lock for send run
 static pthread_mutex_t send_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// Source IP address for outgoing packets
-static in_addr_t srcip_first;
-static in_addr_t srcip_last;
+// Source IP address offset for outgoing packets
 static uint32_t srcip_offset;
-static uint32_t num_src_addrs;
 
 // Source ports for outgoing packets
 static uint16_t num_src_ports;
@@ -84,40 +81,34 @@ iterator_t *send_init(void)
 {
 	// generate a new primitive root and starting position
 	iterator_t *it;
+	uint32_t num_subshards =
+	    (uint32_t)zconf.senders * (uint32_t)zconf.total_shards;
+	if (num_subshards > blacklist_count_allowed()) {
+		log_fatal("send", "senders * shards > allowed probes");
+	}
+	if (zsend.max_targets && (num_subshards > zsend.max_targets)) {
+		log_fatal("send", "senders * shards > max targets");
+	}
 	it = iterator_init(zconf.senders, zconf.shard_num, zconf.total_shards);
-	// process the dotted-notation addresses passed to ZMAP and determine
-	// the source addresses from which we'll send packets;
-	srcip_first = inet_addr(zconf.source_ip_first);
-	if (srcip_first == INADDR_NONE) {
-		log_fatal("send", "invalid begin source ip address: `%s'",
-			  zconf.source_ip_first);
-	}
-	srcip_last = inet_addr(zconf.source_ip_last);
-	if (srcip_last == INADDR_NONE) {
-		log_fatal("send", "invalid end source ip address: `%s'",
-			  zconf.source_ip_last);
-	}
-	log_debug("send", "srcip_first: %u", srcip_first);
-	log_debug("send", "srcip_last: %u", srcip_last);
-	if (srcip_first == srcip_last) {
+	// determine the source address offset from which we'll send packets
+	struct in_addr temp;
+	temp.s_addr = zconf.source_ip_addresses[0];
+	log_debug("send", "srcip_first: %s", inet_ntoa(temp));
+	temp.s_addr = zconf.source_ip_addresses[zconf.number_source_ips - 1];
+	log_debug("send", "srcip_last: %s", inet_ntoa(temp));
+	if (zconf.number_source_ips == 1) {
 		srcip_offset = 0;
-		num_src_addrs = 1;
 	} else {
-		uint32_t ip_first = ntohl(srcip_first);
-		uint32_t ip_last = ntohl(srcip_last);
-		assert(ip_first && ip_last);
-		assert(ip_last > ip_first);
 		uint32_t offset =
 		    (uint32_t)(aesrand_getword(zconf.aes) & 0xFFFFFFFF);
-		srcip_offset = offset % (srcip_last - srcip_first);
-		num_src_addrs = ip_last - ip_first + 1;
+		srcip_offset = offset % (zconf.number_source_ips);
 	}
 
 	// process the source port range that ZMap is allowed to use
 	num_src_ports = zconf.source_port_last - zconf.source_port_first + 1;
 	log_debug("send", "will send from %i address%s on %u source ports",
-		  num_src_addrs, ((num_src_addrs == 1) ? "" : "es"),
-		  num_src_ports);
+		  zconf.number_source_ips,
+		  ((zconf.number_source_ips == 1) ? "" : "es"), num_src_ports);
 	// global initialization for send module
 	assert(zconf.probe_module);
 	if (zconf.probe_module->global_initialize) {
@@ -127,12 +118,22 @@ iterator_t *send_init(void)
 			    "global initialization for probe module failed.");
 		}
 	}
-	// concert specified bandwidth to packet rate
+
+	// only allow bandwidth or rate
+	if (zconf.bandwidth > 0 && zconf.rate > 0) {
+		log_fatal(
+		    "send",
+		    "must specify rate or bandwidth, or neither, not both.");
+	}
+	// convert specified bandwidth to packet rate
 	if (zconf.bandwidth > 0) {
 		size_t pkt_len = zconf.probe_module->packet_length;
 		pkt_len *= 8;
-		pkt_len += 8 * 24; // 7 byte MAC preamble, 1 byte Start frame,
-		// 4 byte CRC, 12 byte inter-frame gap
+		// 7 byte MAC preamble, 1 byte Start frame, 4 byte CRC, 12 byte
+		// inter-frame gap
+		pkt_len += 8 * 24;
+		// adjust calculated length if less than the minimum size of an
+		// ethernet frame
 		if (pkt_len < 84 * 8) {
 			pkt_len = 84 * 8;
 		}
@@ -150,9 +151,17 @@ iterator_t *send_init(void)
 				zconf.rate = 1;
 			}
 		}
-		log_debug("send",
-			  "using bandwidth %lu bits/s, rate set to %d pkt/s",
-			  zconf.bandwidth, zconf.rate);
+		log_debug(
+		    "send",
+		    "using bandwidth %lu bits/s for %zu byte probe, rate set to %d pkt/s",
+		    zconf.bandwidth, pkt_len / 8, zconf.rate);
+	}
+	// log rate, if explicitly specified
+	if (zconf.rate < 0) {
+		log_fatal("send", "rate impossibly slow");
+	}
+	if (zconf.rate > 0 && zconf.bandwidth <= 0) {
+		log_debug("send", "rate set to %d pkt/s", zconf.rate);
 	}
 	// Get the source hardware address, and give it to the probe
 	// module
@@ -185,19 +194,18 @@ iterator_t *send_init(void)
 	// setup signal handlers for changing scan speed
 	signal(SIGUSR1, sig_handler_increase_speed);
 	signal(SIGUSR2, sig_handler_decrease_speed);
-
 	zsend.start = now();
 	return it;
 }
 
 static inline ipaddr_n_t get_src_ip(ipaddr_n_t dst, int local_offset)
 {
-	if (srcip_first == srcip_last) {
-		return srcip_first;
+	if (zconf.number_source_ips == 1) {
+		return zconf.source_ip_addresses[0];
 	}
-	return htonl(((ntohl(dst) + srcip_offset + local_offset) %
-		      num_src_addrs)) +
-	       srcip_first;
+	return zconf
+	    .source_ip_addresses[(ntohl(dst) + srcip_offset + local_offset) %
+				 zconf.number_source_ips];
 }
 
 // one sender thread
@@ -235,12 +243,11 @@ int send_run(sock_t st, shard_t *s)
 	pthread_mutex_unlock(&send_mutex);
 
 	// adaptive timing to hit target rate
-	uint32_t count = 0;
-	uint32_t last_count = count;
+	uint64_t count = 0;
+	uint64_t last_count = count;
 	double last_time = now();
 	uint32_t delay = 0;
 	int interval = 0;
-	uint32_t max_targets = s->state.max_targets;
 	volatile int vi;
 	struct timespec ts, rem;
 	double send_rate = (double)zconf.rate / zconf.senders;
@@ -264,20 +271,21 @@ int send_run(sock_t st, shard_t *s)
 			last_time = now();
 		}
 	}
-	uint32_t curr = shard_get_cur_ip(s);
-	// if list of IPs provided to scan, then the first generated address
-	// might not be on that list. iterate until we find one and can start
-	// the true scanning process
+	// Get the initial IP to scan.
+	uint32_t current_ip = shard_get_cur_ip(s);
+
+	// If provided a list of IPs to scan, then the first generated address
+	// might not be on that list. Iterate until the current IP is one the
+	// list, then start the true scanning process.
 	if (zconf.list_of_ips_filename) {
-		while (!pbm_check(zsend.list_of_ips_pbm, curr)) {
-			curr = shard_get_next_ip(s);
+		while (!pbm_check(zsend.list_of_ips_pbm, current_ip)) {
+			current_ip = shard_get_next_ip(s);
 			s->state.tried_sent++;
-			if (!curr) {
+			if (current_ip == ZMAP_SHARD_DONE) {
 				log_debug(
 				    "send",
 				    "never made it to send loop in send thread %i",
-				    s->id);
-				s->cb(s->id, s->arg);
+				    s->thread_id);
 				goto cleanup;
 			}
 		}
@@ -285,9 +293,9 @@ int send_run(sock_t st, shard_t *s)
 	int attempts = zconf.num_retries + 1;
 	uint32_t idx = 0;
 	while (1) {
-		// adaptive timing delay
+		// Adaptive timing delay
 		send_rate = (double)zconf.rate / zconf.senders;
-		if (delay > 0) {
+		if (count && delay > 0) {
 			if (send_rate < slow_rate) {
 				double t = now();
 				double last_rate = (1.0 / (t - last_time));
@@ -306,64 +314,67 @@ int send_run(sock_t st, shard_t *s)
 					;
 				if (!interval || (count % interval == 0)) {
 					double t = now();
-					delay *= (double)(count - last_count) /
-						 (t - last_time) /
-						 (zconf.rate / zconf.senders);
-					if (delay < 1)
-						delay = 1;
+					assert(count > last_count);
+					assert(t > last_time);
+					double multiplier =
+					    (double)(count - last_count) /
+					    (t - last_time) /
+					    (zconf.rate / zconf.senders);
+					uint32_t old_delay = delay;
+					delay *= multiplier;
+					if (delay == old_delay) {
+						if (multiplier > 1.0) {
+							delay *= 2;
+						} else if (multiplier < 1.0) {
+							delay *= 0.5;
+						}
+					}
 					last_count = count;
 					last_time = t;
 				}
 			}
 		}
+
+		// Check all the ways a send thread could finish and break out
+		// of the send loop.
 		if (zrecv.complete) {
-			s->cb(s->id, s->arg);
 			break;
 		}
-		if (s->state.sent >= max_targets) {
-			s->cb(s->id, s->arg);
+		if (s->state.max_targets &&
+		    (s->state.sent >= s->state.max_targets ||
+		     s->state.tried_sent >= s->state.max_targets)) {
 			log_debug(
 			    "send",
 			    "send thread %hhu finished (max targets of %u reached)",
-			    s->id, max_targets);
-			break;
-		}
-		// estimate a random sample for a provided list of IPs to scan
-		if (zconf.list_of_ips_filename &&
-		    s->state.tried_sent >= max_targets) {
-			s->cb(s->id, s->arg);
-			log_debug(
-			    "send",
-			    "send thread %hhu finished (max targets of %u reached)",
-			    s->id, max_targets);
+			    s->thread_id, s->state.max_targets);
 			break;
 		}
 		if (zconf.max_runtime &&
 		    zconf.max_runtime <= now() - zsend.start) {
-			s->cb(s->id, s->arg);
 			break;
 		}
-		if (curr == 0) {
-			s->cb(s->id, s->arg);
+		if (current_ip == ZMAP_SHARD_DONE) {
 			log_debug("send",
 				  "send thread %hhu finished, shard depleted",
-				  s->id);
+				  s->thread_id);
 			break;
 		}
+
+		// Actually send a packet.
 		for (int i = 0; i < zconf.packet_streams; i++) {
 			count++;
-			uint32_t src_ip = get_src_ip(curr, i);
+			uint32_t src_ip = get_src_ip(current_ip, i);
 			uint32_t validation[VALIDATE_BYTES / sizeof(uint32_t)];
-			validate_gen(src_ip, curr, (uint8_t *)validation);
+			validate_gen(src_ip, current_ip, (uint8_t *)validation);
 			size_t length = zconf.probe_module->packet_length;
 			zconf.probe_module->make_packet(buf, &length, src_ip,
-							curr, validation, i,
-							probe_data);
+							current_ip, validation,
+							i, probe_data);
 			if (length > MAX_PACKET_SIZE) {
 				log_fatal(
 				    "send",
 				    "send thread %hhu set length (%zu) larger than MAX (%zu)",
-				    s->id, length, MAX_PACKET_SIZE);
+				    s->thread_id, length, MAX_PACKET_SIZE);
 			}
 			if (zconf.dryrun) {
 				lock_file(stdout);
@@ -373,13 +384,15 @@ int send_run(sock_t st, shard_t *s)
 				void *contents =
 				    buf + zconf.send_ip_pkts *
 					      sizeof(struct ether_header);
+				length -= (zconf.send_ip_pkts *
+					   sizeof(struct ether_header));
 				int any_sends_successful = 0;
 				for (int i = 0; i < attempts; ++i) {
 					int rc = send_packet(st, contents,
 							     length, idx);
 					if (rc < 0) {
 						struct in_addr addr;
-						addr.s_addr = curr;
+						addr.s_addr = current_ip;
 						char addr_str_buf
 						    [INET_ADDRSTRLEN];
 						const char *addr_str =
@@ -405,31 +418,36 @@ int send_run(sock_t st, shard_t *s)
 				idx &= 0xFF;
 			}
 		}
-		// number of hosts we actually scanned
-		curr = shard_get_next_ip(s);
+		// Track the number of hosts we actually scanned.
 		s->state.sent++;
 		s->state.tried_sent++;
-		if (curr && zconf.list_of_ips_filename) {
-			while (!pbm_check(zsend.list_of_ips_pbm, curr)) {
-				curr = shard_get_next_ip(s);
+
+		// Get the next IP to scan
+		current_ip = shard_get_next_ip(s);
+		if (zconf.list_of_ips_filename &&
+		    current_ip != ZMAP_SHARD_DONE) {
+			// If we have a list of IPs bitmap, ensure the next IP
+			// to scan is on the list.
+			while (!pbm_check(zsend.list_of_ips_pbm, current_ip)) {
+				current_ip = shard_get_next_ip(s);
 				s->state.tried_sent++;
-				if (!curr) {
-					s->cb(s->id, s->arg);
+				if (current_ip == ZMAP_SHARD_DONE) {
 					log_debug(
 					    "send",
 					    "send thread %hhu shard finished in get_next_ip_loop depleted",
-					    s->id);
+					    s->thread_id);
 					goto cleanup;
 				}
 			}
 		}
 	}
 cleanup:
+	s->cb(s->thread_id, s->arg);
 	if (zconf.dryrun) {
 		lock_file(stdout);
 		fflush(stdout);
 		unlock_file(stdout);
 	}
-	log_debug("send", "thread %hu cleanly finished", s->id);
+	log_debug("send", "thread %hu cleanly finished", s->thread_id);
 	return EXIT_SUCCESS;
 }

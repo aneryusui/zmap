@@ -24,7 +24,7 @@ struct state_conf zconf = {.log_level = LOG_INFO,
 			   .max_runtime = 0,
 			   .max_results = 0,
 			   .iface = NULL,
-			   .rate = 0,
+			   .rate = 10000,
 			   .bandwidth = 0,
 			   .cooldown_secs = 0,
 			   .senders = 1,
@@ -40,9 +40,9 @@ struct state_conf zconf = {.log_level = LOG_INFO,
 			   .hw_mac = {0},
 			   .gw_mac_set = 0,
 			   .hw_mac_set = 0,
+			   .source_ip_addresses = NULL,
+			   .number_source_ips = 0,
 			   .send_ip_pkts = 0,
-			   .source_ip_first = NULL,
-			   .source_ip_last = NULL,
 			   .raw_output_fields = NULL,
 			   .output_fields = NULL,
 			   .output_filter_str = NULL,
@@ -61,7 +61,8 @@ struct state_conf zconf = {.log_level = LOG_INFO,
 			   .metadata_filename = NULL,
 			   .notes = NULL,
 			   .custom_metadata_str = NULL,
-			   .recv_ready = 0};
+			   .recv_ready = 0,
+			   .data_link_size = 0};
 
 // global sender stats and defaults
 struct state_send zsend = {
@@ -74,7 +75,7 @@ struct state_send zsend = {
     .warmup = 1,
     .complete = 0,
     .sendto_failures = 0,
-    .targets = 0,
+    .max_targets = 0,
     .list_of_ips_pbm = NULL,
 };
 
@@ -89,6 +90,7 @@ struct state_recv zrecv = {
     .cooldown_unique = 0,
     .cooldown_total = 0,
     .failure_total = 0,
+    .filter_success = 0,
     .ip_fragments = 0,
     .complete = 0,
     .pcap_recv = 0,

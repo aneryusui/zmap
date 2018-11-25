@@ -56,8 +56,8 @@ void shard_complete(uint8_t thread_id, void *arg)
 	pthread_mutex_unlock(&it->mutex);
 }
 
-iterator_t *iterator_init(uint8_t num_threads, uint8_t shard,
-			  uint8_t num_shards)
+iterator_t *iterator_init(uint8_t num_threads, uint16_t shard,
+			  uint16_t num_shards)
 {
 	uint64_t num_addrs = blacklist_count_allowed();
 	iterator_t *it = xmalloc(sizeof(struct iterator));
@@ -67,6 +67,7 @@ iterator_t *iterator_init(uint8_t num_threads, uint8_t shard,
 	} else {
 		zsend.max_index = (uint32_t)num_addrs;
 	}
+	log_debug("iterator", "max index %u", zsend.max_index);
 	it->cycle = make_cycle(group, zconf.aes);
 	it->num_threads = num_threads;
 	it->curr_threads = num_threads;
@@ -75,7 +76,8 @@ iterator_t *iterator_init(uint8_t num_threads, uint8_t shard,
 	pthread_mutex_init(&it->mutex, NULL);
 	for (uint8_t i = 0; i < num_threads; ++i) {
 		shard_init(&it->thread_shards[i], shard, num_shards, i,
-			   num_threads, &it->cycle, shard_complete, it);
+			   num_threads, zsend.max_targets, &it->cycle,
+			   shard_complete, it);
 	}
 	zconf.generator = it->cycle.generator;
 	return it;

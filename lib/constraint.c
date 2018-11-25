@@ -59,11 +59,11 @@ typedef struct node {
 #define RADIX_LENGTH 20
 
 struct _constraint {
-	node_t *root;	// root node of the tree
-	uint32_t *radix;     // array of prefixes (/RADIX_LENGTH) that are painted
-			     // paint_value
-	size_t radix_len;    // number of prefixes in radix array
-	int painted;	 // have we precomputed counts for each node?
+	node_t *root;     // root node of the tree
+	uint32_t *radix;  // array of prefixes (/RADIX_LENGTH) that are painted
+			  // paint_value
+	size_t radix_len; // number of prefixes in radix array
+	int painted;      // have we precomputed counts for each node?
 	value_t paint_value; // value for which we precomputed counts
 };
 
@@ -107,7 +107,7 @@ static void _convert_to_leaf(node_t *node)
 static void _set_recurse(node_t *node, uint32_t prefix, int len, value_t value)
 {
 	assert(node);
-	assert(0 <= len && len <= 32);
+	assert(0 <= len && len <= 256);
 
 	if (len == 0) {
 		// We're at the end of the prefix; make this a leaf and set the

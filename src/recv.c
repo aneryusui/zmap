@@ -26,20 +26,17 @@
 #include "output_modules/output_modules.h"
 
 static u_char fake_eth_hdr[65535];
-
 // bitmap of observed IP addresses
 static uint8_t **seen = NULL;
 
 void handle_packet(uint32_t buflen, const u_char *bytes)
 {
-	if ((sizeof(struct ip) +
-	     (zconf.send_ip_pkts ? 0 : sizeof(struct ether_header))) > buflen) {
+	if ((sizeof(struct ip) + zconf.data_link_size) > buflen) {
 		// buffer not large enough to contain ethernet
 		// and ip headers. further action would overrun buf
 		return;
 	}
-	struct ip *ip_hdr = (struct ip *)&bytes[(
-	    zconf.send_ip_pkts ? 0 : sizeof(struct ether_header))];
+	struct ip *ip_hdr = (struct ip *)&bytes[zconf.data_link_size];
 
 	uint32_t src_ip = ip_hdr->ip_src.s_addr;
 
@@ -68,7 +65,7 @@ void handle_packet(uint32_t buflen, const u_char *bytes)
 	fieldset_t *fs = fs_new_fieldset();
 	fs_add_ip_fields(fs, ip_hdr);
 	// HACK:
-	// probe modules (for whatever reason) expect the full ethernet frame
+	// probe modules expect the full ethernet frame
 	// in process_packet. For VPN, we only get back an IP frame.
 	// Here, we fake an ethernet frame (which is initialized to
 	// have ETH_P_IP proto and 00s for dest/src).
@@ -76,8 +73,8 @@ void handle_packet(uint32_t buflen, const u_char *bytes)
 		if (buflen > sizeof(fake_eth_hdr)) {
 			buflen = sizeof(fake_eth_hdr);
 		}
-		memcpy(&fake_eth_hdr[sizeof(struct ether_header)], bytes,
-		       buflen);
+		memcpy(&fake_eth_hdr[sizeof(struct ether_header)],
+		       bytes + zconf.data_link_size, buflen);
 		bytes = fake_eth_hdr;
 	}
 	zconf.probe_module->process_packet(bytes, buflen, fs, validation);
@@ -125,6 +122,7 @@ void handle_packet(uint32_t buflen, const u_char *bytes)
 	if (!evaluate_expression(zconf.filter.expression, fs)) {
 		goto cleanup;
 	}
+	zrecv.filter_success++;
 	o = translate_fieldset(fs, &zconf.fsconf.translation);
 	if (zconf.output_module && zconf.output_module->process_ip) {
 		zconf.output_module->process_ip(o);
@@ -182,7 +180,7 @@ int recv_run(pthread_mutex_t *recv_ready_mutex)
 		} else {
 			recv_packets();
 			if (zconf.max_results &&
-			    zrecv.success_unique >= zconf.max_results) {
+			    zrecv.filter_success >= zconf.max_results) {
 				break;
 			}
 		}

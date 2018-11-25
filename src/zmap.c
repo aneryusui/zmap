@@ -40,6 +40,7 @@
 #include "get_gateway.h"
 #include "filter.h"
 #include "summary.h"
+#include "utility.h"
 
 #include "output_modules/output_modules.h"
 #include "probe_modules/probe_modules.h"
@@ -121,22 +122,20 @@ static void start_zmap(void)
 			  " interface (%s).",
 			  zconf.iface);
 	}
-	if (zconf.source_ip_first == NULL) {
+	if (zconf.number_source_ips == 0) {
 		struct in_addr default_ip;
-		zconf.source_ip_first = xmalloc(INET_ADDRSTRLEN);
-		zconf.source_ip_last = zconf.source_ip_first;
 		if (get_iface_ip(zconf.iface, &default_ip) < 0) {
 			log_fatal("zmap",
 				  "could not detect default IP address for %s."
 				  " Try specifying a source address (-S).",
 				  zconf.iface);
 		}
-		inet_ntop(AF_INET, &default_ip, zconf.source_ip_first,
-			  INET_ADDRSTRLEN);
+		zconf.source_ip_addresses[0] = default_ip.s_addr;
+		zconf.number_source_ips++;
 		log_debug(
 		    "zmap",
 		    "no source IP address given. will use default address: %s.",
-		    zconf.source_ip_first);
+		    inet_ntoa(default_ip));
 	}
 	if (!zconf.gw_mac_set) {
 		struct in_addr gw_ip;
@@ -457,7 +456,7 @@ int main(int argc, char *argv[])
 		print_probe_modules();
 		exit(EXIT_SUCCESS);
 	}
-	if (args.vpn_given) {
+	if (args.iplayer_given) {
 		zconf.send_ip_pkts = 1;
 		zconf.gw_mac_set = 1;
 		memset(zconf.gw_mac, 0, MAC_ADDR_LEN);
@@ -701,15 +700,7 @@ int main(int argc, char *argv[])
 		zconf.target_port = args.target_port_arg;
 	}
 	if (args.source_ip_given) {
-		char *dash = strchr(args.source_ip_arg, '-');
-		if (dash) { // range
-			*dash = '\0';
-			zconf.source_ip_first = args.source_ip_arg;
-			zconf.source_ip_last = dash + 1;
-		} else { // single address
-			zconf.source_ip_first = args.source_ip_arg;
-			zconf.source_ip_last = args.source_ip_arg;
-		}
+		parse_source_ip_addresses(args.source_ip_arg);
 	}
 	if (args.gateway_mac_given) {
 		if (!parse_mac(zconf.gw_mac, args.gateway_mac_arg)) {
@@ -759,10 +750,10 @@ int main(int argc, char *argv[])
 		    "Need to specify both shard number and total number of shards");
 	}
 	if (args.shard_given) {
-		enforce_range("shard", args.shard_arg, 0, 254);
+		enforce_range("shard", args.shard_arg, 0, 65534);
 	}
 	if (args.shards_given) {
-		enforce_range("shards", args.shards_arg, 1, 254);
+		enforce_range("shards", args.shards_arg, 1, 65535);
 	}
 	SET_IF_GIVEN(zconf.shard_num, shard);
 	SET_IF_GIVEN(zconf.total_shards, shards);
@@ -828,18 +819,12 @@ int main(int argc, char *argv[])
 	zconf.total_allowed = allowed;
 	zconf.total_disallowed = blacklist_count_not_allowed();
 	assert(allowed <= (1LL << 32));
-	if (allowed == (1LL << 32)) {
-		zsend.targets = 0xFFFFFFFF;
-	} else {
-		zsend.targets = allowed;
-	}
-	if (zsend.targets > zconf.max_targets) {
-		zsend.targets = zconf.max_targets;
-	}
-	if (!zsend.targets) {
+	if (!zconf.total_allowed) {
 		log_fatal("zmap", "zero eligible addresses to scan");
 	}
-
+	if (zconf.max_targets) {
+		zsend.max_targets = zconf.max_targets;
+	}
 #ifndef PFRING
 	// Set the correct number of threads, default to num_cores - 1
 	if (args.sender_threads_given) {
@@ -847,7 +832,7 @@ int main(int argc, char *argv[])
 	} else {
 		zconf.senders = 1;
 	}
-	if (2 * zconf.senders >= zsend.targets) {
+	if (2 * zconf.senders >= zsend.max_targets) {
 		log_warn(
 		    "zmap",
 		    "too few targets relative to senders, dropping to one sender");

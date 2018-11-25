@@ -39,7 +39,7 @@ option "max-targets"            n "Cap number of targets to probe (as a number o
     typestr="n"
     optional string
 option "max-runtime"            t "Cap length of time for sending packets"
-    typestr="ses"
+    typestr="secs"
     optional int
 option "max-results"            N "Cap number of results to return"
     typestr="n"
@@ -87,7 +87,7 @@ option "source-mac"             - "Source MAC address"
 option "interface"              i "Specify network interface to use"
     typestr="name"
     optional string
-option "vpn"                    X "Sends IP packets instead of Ethernet (for VPNs)"
+option "iplayer"                X "Sends IP packets instead of Ethernet (for VPNs)"
     optional
 
 section "Probe Modules"

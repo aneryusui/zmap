@@ -75,8 +75,8 @@ struct state_conf {
 	// address generation
 	uint32_t generator;
 	// sharding options
-	uint8_t shard_num;
-	uint8_t total_shards;
+	uint16_t shard_num;
+	uint16_t total_shards;
 	int packet_streams;
 	struct probe_module *probe_module;
 	char *output_module_name;
@@ -88,9 +88,9 @@ struct state_conf {
 	uint32_t gw_ip;
 	int gw_mac_set;
 	int hw_mac_set;
+	in_addr_t source_ip_addresses[256];
+	uint32_t number_source_ips;
 	int send_ip_pkts;
-	char *source_ip_first;
-	char *source_ip_last;
 	char *output_filename;
 	char *blacklist_filename;
 	char *whitelist_filename;
@@ -123,6 +123,7 @@ struct state_conf {
 	uint64_t total_disallowed;
 	int max_sendto_failures;
 	float min_hitrate;
+	int data_link_size;
 #ifdef PFRING
 	struct {
 		pfring_zc_cluster *cluster;
@@ -147,7 +148,7 @@ struct state_send {
 	int warmup;
 	int complete;
 	uint32_t first_scanned;
-	uint32_t targets;
+	uint32_t max_targets;
 	uint32_t sendto_failures;
 	uint32_t max_index;
 	uint8_t **list_of_ips_pbm;
@@ -170,6 +171,8 @@ struct state_recv {
 	uint32_t cooldown_unique;
 	// valid responses NOT classified as "success"
 	uint32_t failure_total;
+	// valid responses that passed the filter
+	uint32_t filter_success;
 	// how many packets did we receive that were marked as being the first
 	// fragment in a stream
 	uint32_t ip_fragments;
